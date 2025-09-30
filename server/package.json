@@ -6,6 +6,8 @@
     "dev": "tsx src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"
+    "postinstall": "npx playwright install --with-deps"
+
   },
   "dependencies": {
     "cors": "^2.8.5",
