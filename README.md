@@ -39,4 +39,4 @@ A full-stack app to calculate GPA based on Genesis.
 │     │  ├─ TrendChart.tsx
 │     │  └─ FileDrop.tsx
 │     └─ styles.css
-└─ README.md```
+└─ README.md
