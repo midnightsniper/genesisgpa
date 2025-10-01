@@ -30,16 +30,31 @@ export type GenesisData = {
 export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisData> {
   const browser: Browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+
   try {
+    // Navigate to login page
     await page.goto(input.url, { waitUntil: 'domcontentloaded' });
 
-    await page.fill('input[name="j_username"], input#j_username', input.username);
-    await page.fill('input[name="j_password"], input#j_password', input.password);
-    await page.click('input[type="submit"], button:has-text("Login")');
+    // Wait for username field to appear
+    await page.waitForSelector('#j_username', { timeout: 30000 });
 
+    // Fill in credentials
+    await page.fill('#j_username', input.username);
+    await page.fill('#j_password', input.password);
+
+    // Click the Login button
+    await page.click('input[type="submit"][value="Login"]');
+
+    // Wait until the post-login DOM loads
     await page.waitForLoadState('domcontentloaded');
-    await page.click('a:has-text("Gradebook"), a:has-text("Summary")', { timeout: 10000 }).catch(() => {});
 
+    // Try navigating to Gradebook or Summary if available
+    await page.locator('a:has-text("Gradebook"), a:has-text("Summary")')
+      .first()
+      .click({ timeout: 10000 })
+      .catch(() => { /* optional: ignore if not present */ });
+
+    // Scrape course info (placeholder logic — adjust to your district’s table structure)
     const courses = await page.$$eval('table tr', rows => {
       const out: any[] = [];
       rows.forEach((tr: any) => {
@@ -58,6 +73,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return out;
     });
 
+    // Dummy marking periods for now
     for (const c of courses) {
       c.markingPeriods = [
         { label: 'MP1', percent: 95, weight: 0.5 },
