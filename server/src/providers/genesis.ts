@@ -32,61 +32,76 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
   const page = await browser.newPage();
 
   try {
-    // Navigate to login page
     await page.goto(input.url, { waitUntil: 'domcontentloaded' });
-
-    // Wait for username field to appear
     await page.waitForSelector('#j_username', { timeout: 30000 });
-
-    // Fill in credentials
     await page.fill('#j_username', input.username);
     await page.fill('#j_password', input.password);
-
-    // Click the Login button
     await page.click('input[type="submit"][value="Login"]');
-
-    // Wait until the post-login DOM loads
     await page.waitForLoadState('domcontentloaded');
 
-    // Try navigating to Gradebook or Summary if available
-    await page.locator('a:has-text("Gradebook"), a:has-text("Summary")')
-      .first()
-      .click({ timeout: 10000 })
-      .catch(() => { /* optional: ignore if not present */ });
+    await page.locator('a:has-text("Gradebook")').first().click({ timeout: 10000 });
+    await page.waitForLoadState('domcontentloaded');
 
-    // Scrape course info (placeholder logic — adjust to your district’s table structure)
-    const courses = await page.$$eval('table tr', rows => {
+    const courses = await page.$$eval('.gbClassName', (nodes) => {
       const out: any[] = [];
-      rows.forEach((tr: any) => {
-        const tds = Array.from(tr.querySelectorAll('td')).map((td: any) => td.textContent?.trim() || '');
-        if (tds.length >= 3 && /\d+/.test(tds[2])) {
-          out.push({
-            id: tds[0] || (globalThis.crypto as any)?.randomUUID?.() || String(Math.random()),
-            name: tds[1],
-            code: tds[0],
-            credit: parseFloat(tds[2]) || 1,
-            level: 'Unknown',
-            markingPeriods: []
-          });
-        }
+      nodes.forEach((el: any) => {
+        const courseName = el.textContent?.trim() || '';
+        const parentBox = el.closest('.gbClassContainer') || el.closest('div');
+        if (!parentBox) return;
+
+        const mpGrades: { label: string; percent: number; weight: number }[] = [];
+        const mpCells = parentBox.querySelectorAll('.gbMPBox');
+        mpCells.forEach((mp: any, idx: number) => {
+          const text = mp.textContent?.trim() || '';
+          const percent = parseFloat(text.replace('%', ''));
+          if (!isNaN(percent)) {
+            mpGrades.push({
+              label: `MP${idx + 1}`,
+              percent,
+              weight: 1 // will normalize later
+            });
+          }
+        });
+
+        out.push({
+          id: crypto.randomUUID(),
+          name: courseName,
+          code: undefined,
+          credit: 0, 
+          level: 'Unknown',
+          markingPeriods: mpGrades
+        });
       });
       return out;
     });
 
-    // Dummy marking periods for now
-    for (const c of courses) {
-      c.markingPeriods = [
-        { label: 'MP1', percent: 95, weight: 0.5 },
-        { label: 'MP2', percent: 92, weight: 0.5 }
-      ];
-    }
+    await page.locator('a:has-text("Grading")').first().click({ timeout: 10000 });
+    await page.locator('a:has-text("Current Grades")').first().click({ timeout: 10000 });
+    await page.waitForLoadState('domcontentloaded');
 
-    const normalized = courses.map((c: any) => ({
-      ...c,
-      level: detectLevel(c.name)
-    }));
+    const creditsMap = await page.$$eval('table tr', (rows) => {
+      const map: Record<string, number> = {};
+      rows.forEach((tr) => {
+        const tds = Array.from(tr.querySelectorAll('td')).map((td: any) => td.textContent?.trim() || '');
+        if (tds.length >= 5) {
+          const name = tds[0];
+          const credit = parseFloat(tds[4]) || 0;
+          if (name) map[name] = credit;
+        }
+      });
+      return map;
+    });
 
-    const assignments: GenesisData['assignments'] = [];
+    const normalized = courses.map((c: any) => {
+      const credit = creditsMap[c.name] || 1;
+      return {
+        ...c,
+        credit,
+        level: detectLevel(c.name)
+      };
+    });
+
+    const assignments: GenesisData['assignments'] = []; // (future: scrape “List Assignments” tab)
 
     return { courses: normalized, assignments };
   } finally {
