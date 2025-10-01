@@ -9,9 +9,16 @@ import { gpaRouter } from './routes/gpa.js';
 import { exportRouter } from './routes/export.js';
 
 const app = express();
+
 app.use(helmet());
 app.use(express.json({ limit: '2mb' }));
-app.use(cors({ origin: config.origin }));
+
+// 👇 Now uses config.origin
+app.use(cors({
+  origin: config.origin,
+  credentials: true
+}));
+
 app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
 
 app.use('/api/health', healthRouter);
@@ -19,4 +26,6 @@ app.use('/api/import', importRouter);
 app.use('/api/gpa', gpaRouter);
 app.use('/api/export', exportRouter);
 
-app.listen(config.port, () => console.log(`API on :${config.port}`));
+app.listen(config.port, () => {
+  console.log(`API running on :${config.port}`);
+});
