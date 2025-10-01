@@ -32,16 +32,34 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
   const page = await browser.newPage();
 
   try {
+    // 1. Go to parent access page
     await page.goto(input.url, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#j_username', { timeout: 30000 });
-    await page.fill('#j_username', input.username);
-    await page.fill('#j_password', input.password);
-    await page.click('input[type="submit"][value="Login"]');
+
+    // 2. Try normal login form
+    const loginForm = page.locator('#j_username');
+    if (await loginForm.count() > 0) {
+      await page.fill('#j_username', input.username);
+      await page.fill('#j_password', input.password);
+      await page.click('input[type="submit"][value="Login"]');
+      await page.waitForLoadState('domcontentloaded');
+    } else {
+      // 3. Fallback: POST directly to j_security_check
+      const base = new URL(input.url).origin;
+      await page.request.post(`${base}/genesis/j_security_check`, {
+        form: {
+          j_username: input.username,
+          j_password: input.password
+        }
+      });
+      // Navigate back to parents home
+      await page.goto(`${base}/genesis/parents?gohome=true`, { waitUntil: 'domcontentloaded' });
+    }
+
+    // 4. Navigate to Gradebook
+    await page.locator('a:has-text("Gradebook")').first().click({ timeout: 15000 });
     await page.waitForLoadState('domcontentloaded');
 
-    await page.locator('a:has-text("Gradebook")').first().click({ timeout: 10000 });
-    await page.waitForLoadState('domcontentloaded');
-
+    // 5. Scrape courses + marking period grades
     const courses = await page.$$eval('.gbClassName', (nodes) => {
       const out: any[] = [];
       nodes.forEach((el: any) => {
@@ -58,7 +76,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
             mpGrades.push({
               label: `MP${idx + 1}`,
               percent,
-              weight: 1 // will normalize later
+              weight: 1
             });
           }
         });
@@ -67,7 +85,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
           id: crypto.randomUUID(),
           name: courseName,
           code: undefined,
-          credit: 0, 
+          credit: 0, // placeholder, filled later
           level: 'Unknown',
           markingPeriods: mpGrades
         });
@@ -75,6 +93,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return out;
     });
 
+    // 6. Go to Grading → Current Grades to fetch credits
     await page.locator('a:has-text("Grading")').first().click({ timeout: 10000 });
     await page.locator('a:has-text("Current Grades")').first().click({ timeout: 10000 });
     await page.waitForLoadState('domcontentloaded');
@@ -92,6 +111,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return map;
     });
 
+    // 7. Normalize courses with credit + AP/Honors detection
     const normalized = courses.map((c: any) => {
       const credit = creditsMap[c.name] || 1;
       return {
@@ -101,7 +121,9 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       };
     });
 
-    const assignments: GenesisData['assignments'] = []; // (future: scrape “List Assignments” tab)
+    // 8. Placeholder for assignment scraping
+    const assignments: GenesisData['assignments'] = [];
+    // (Later: scrape from "List Assignments" tab)
 
     return { courses: normalized, assignments };
   } finally {
