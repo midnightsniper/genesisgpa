@@ -7,6 +7,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,12 +20,13 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
-      # Set your API URL from Render (replace with your actual URL once live)
-      - run: echo "VITE_API=https://genesisgpa.onrender.com" >> .env
+      # Replace the URL below with your actual Render API URL
+      - run: echo "VITE_API=https://<your-render-subdomain>.onrender.com" >> .env
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: client/dist
+
   deploy:
     environment:
       name: github-pages
