@@ -18,8 +18,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
-      - run: echo "VITE_API=https://genesisgpa.onrender.com" >> .env
+      - run: npm install
+      # Set your API URL from Render (replace with your actual URL once live)
+      - run: echo "VITE_API=https://genesisgpa-api.onrender.com" >> .env
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
