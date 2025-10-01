@@ -32,11 +32,14 @@ function originOf(url: string) {
 }
 
 async function resolveStudentId(page: import('playwright').Page): Promise<string> {
+  // Wait briefly for page to stabilize, but don't wait for visibility
+  await page.waitForTimeout(2000);
+
   // 1) URL param
   const urlMatch = page.url().match(/studentid=(\d+)/i);
   if (urlMatch) return urlMatch[1];
 
-  // 2) Anchor with studentid
+  // 2) Anchor with studentid (check all anchors, visible or not)
   const fromAnchor = await page.$$eval('a[href*="studentid="]', (as: any[]) => {
     for (const a of as) {
       const href = (a as any).getAttribute?.('href') || '';
@@ -71,42 +74,53 @@ async function resolveStudentId(page: import('playwright').Page): Promise<string
   });
   if (fromScript) return fromScript;
 
-  throw new Error('Could not extract studentId');
+  // 5) Try to find it in page content
+  const pageContent = await page.content();
+  const contentMatch = pageContent.match(/studentid[=:]?\s*["']?(\d{4,})["']?/i);
+  if (contentMatch) return contentMatch[1];
+
+  throw new Error('Could not extract studentId from any source');
 }
 
 export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisData> {
   const base = originOf(input.url);
   const loginUrl = `${base}/genesis/parents?gohome=true`;
-  const summaryUrl = `${base}/genesis/parents?tab1=studentdata&tab2=studentsummary&action=form`;
 
   const browser: Browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
   try {
     // --- LOGIN ---
-    await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    if (await page.locator('#j_username').count()) {
+    // Try visible form first
+    const hasVisibleForm = await page.locator('#j_username').count() > 0;
+    
+    if (hasVisibleForm) {
       await page.fill('#j_username', input.username);
       await page.fill('#j_password', input.password);
       await page.click('input[type="submit"][value="Login"]');
-      await page.waitForLoadState('domcontentloaded');
+      await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
     } else {
+      // Fallback: POST directly
       await page.request.post(`${base}/genesis/j_security_check`, {
         form: { j_username: input.username, j_password: input.password }
       });
-      await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
 
-    // --- SUMMARY PAGE ---
-    await page.goto(summaryUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#mainContainer, .container, body.parentsBodyMobile', { timeout: 20000 });
-
+    // --- EXTRACT STUDENT ID (no visibility waiting) ---
+    // We're now on some post-login page. Try to extract studentId immediately.
     const studentId = await resolveStudentId(page);
 
     // --- GRADEBOOK ---
     const gradebookUrl = `${base}/genesis/parents?tab1=studentdata&tab2=gradebook&tab3=weeklysummary&action=form&studentid=${studentId}`;
-    await page.goto(gradebookUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(gradebookUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Wait for gradebook container
+    await page.waitForSelector('.gbClassContainer, .gradebook, #gradebook', { timeout: 20000 }).catch(() => {
+      // If selector doesn't appear, continue anyway - may still find data
+    });
 
     const courses = await page.$$eval('.gbClassContainer', (nodes: any[]) => {
       const out: any[] = [];
@@ -137,9 +151,14 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return out;
     });
 
-    // --- GRADING ---
+    // --- GRADING (Current Grades for credits) ---
     const gradingUrl = `${base}/genesis/parents?tab1=studentdata&tab2=grading&tab3=current&action=form&studentid=${studentId}`;
-    await page.goto(gradingUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(gradingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Wait for grading table
+    await page.waitForSelector('table', { timeout: 20000 }).catch(() => {
+      // Continue even if not found
+    });
 
     const creditsMap = await page.$$eval('table tr', (rows: any[]) => {
       const map: Record<string, number> = {};
@@ -148,11 +167,16 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
           .map((td: any) => (td.textContent || '').trim());
         if (tds.length >= 2) {
           const course = tds[0];
+          // Try to find credit value - typically in a later column
           let credit = parseFloat(tds[4]);
           if (Number.isNaN(credit)) {
+            // Search backwards through columns for a valid number
             for (let i = tds.length - 1; i >= 1; i--) {
               const maybe = parseFloat(tds[i]);
-              if (!Number.isNaN(maybe)) { credit = maybe; break; }
+              if (!Number.isNaN(maybe) && maybe > 0 && maybe <= 2) {
+                credit = maybe;
+                break;
+              }
             }
           }
           if (course) map[course] = Number.isFinite(credit) ? credit : 1;
@@ -161,6 +185,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return map;
     });
 
+    // Merge credits and detect levels
     const normalized = (courses as any[]).map(c => ({
       ...c,
       credit: creditsMap[c.name] ?? 1,
@@ -168,6 +193,8 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
     }));
 
     return { courses: normalized, assignments: [] };
+  } catch (error: any) {
+    throw new Error(`Genesis scrape failed: ${error.message}`);
   } finally {
     await browser.close();
   }
