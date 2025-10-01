@@ -1,7 +1,10 @@
-import 'dotenv/config';
-
-
 export const config = {
-  port: Number(process.env.PORT || 5177),
-  origin: process.env.ORIGIN || 'http://localhost:5173'
+  // Render will inject PORT, default to 5177 for local dev
+  port: process.env.PORT ? parseInt(process.env.PORT) : 5177,
+
+  // 👇 Add all allowed frontends here
+  origin: [
+    "https://midnightsniper.github.io",
+    "https://midnightsniper.github.io/genesisgpa"
+  ]
 };
