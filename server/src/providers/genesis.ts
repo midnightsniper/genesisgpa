@@ -2,8 +2,7 @@ import { chromium, Browser } from 'playwright';
 import { detectLevel } from '../detectors.js';
 
 export type GenesisFetchInput = {
-  // Root or login page, e.g. https://parents.ebnet.org/genesis
-  url: string;
+  url: string;       // e.g. https://parents.ebnet.org/genesis
   username: string;
   password: string;
 };
@@ -29,35 +28,33 @@ export type GenesisData = {
 };
 
 function originOf(url: string) {
-  return new URL(url).origin; // e.g. https://parents.ebnet.org
+  return new URL(url).origin;
 }
 
 async function resolveStudentId(page: import('playwright').Page): Promise<string> {
   // 1) URL param
-  {
-    const m = page.url().match(/studentid=(\d+)/i);
-    if (m) return m[1];
-  }
+  const urlMatch = page.url().match(/studentid=(\d+)/i);
+  if (urlMatch) return urlMatch[1];
 
-  // 2) Any anchor with studentid in href
-  const anchorHref = await page.$$eval('a[href*="studentid="]', (as: any[]) => {
+  // 2) Anchor with studentid
+  const fromAnchor = await page.$$eval('a[href*="studentid="]', (as: any[]) => {
     for (const a of as) {
       const href = (a as any).getAttribute?.('href') || '';
       const m = href.match(/studentid=(\d+)/i);
       if (m) return m[1];
     }
-    return null as string | null;
+    return null;
   });
-  if (anchorHref) return anchorHref;
+  if (fromAnchor) return fromAnchor;
 
-  // 3) Any element id like "studentDialog112185"
+  // 3) Element IDs like studentDialog112185
   const fromId = await page.$$eval('[id^="student"], [id*="student"]', (els: any[]) => {
     for (const el of els) {
       const id = (el as any).id || '';
       const m = id.match(/student(?:Dialog|Summary|Card)?(\d{4,})/i);
       if (m) return m[1];
     }
-    return null as string | null;
+    return null;
   });
   if (fromId) return fromId;
 
@@ -70,7 +67,7 @@ async function resolveStudentId(page: import('playwright').Page): Promise<string
         txt.match(/studentid=(\d{4,})/i);
       if (m) return m[1];
     }
-    return null as string | null;
+    return null;
   });
   if (fromScript) return fromScript;
 
@@ -78,7 +75,7 @@ async function resolveStudentId(page: import('playwright').Page): Promise<string
 }
 
 export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisData> {
-  const base = originOf(input.url); // e.g. https://parents.ebnet.org
+  const base = originOf(input.url);
   const loginUrl = `${base}/genesis/parents?gohome=true`;
   const summaryUrl = `${base}/genesis/parents?tab1=studentdata&tab2=studentsummary&action=form`;
 
@@ -86,7 +83,7 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
   const page = await browser.newPage();
 
   try {
-    // --- LOGIN (form or POST fallback) ---
+    // --- LOGIN ---
     await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
 
     if (await page.locator('#j_username').count()) {
@@ -95,25 +92,22 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       await page.click('input[type="submit"][value="Login"]');
       await page.waitForLoadState('domcontentloaded');
     } else {
-      // Fallback: programmatic login
       await page.request.post(`${base}/genesis/j_security_check`, {
         form: { j_username: input.username, j_password: input.password }
       });
       await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
     }
 
-    // Force the Summary page once; EBNet often adds studentid to links here.
+    // --- SUMMARY PAGE ---
     await page.goto(summaryUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('body', { timeout: 15000 });
+    await page.waitForSelector('#mainContainer, .container, body.parentsBodyMobile', { timeout: 20000 });
 
     const studentId = await resolveStudentId(page);
 
-    // --- GRADEBOOK: weekly summary ---
-    const gradebookUrl =
-      `${base}/genesis/parents?tab1=studentdata&tab2=gradebook&tab3=weeklysummary&action=form&studentid=${studentId}`;
+    // --- GRADEBOOK ---
+    const gradebookUrl = `${base}/genesis/parents?tab1=studentdata&tab2=gradebook&tab3=weeklysummary&action=form&studentid=${studentId}`;
     await page.goto(gradebookUrl, { waitUntil: 'domcontentloaded' });
 
-    // Course cards: .gbClassContainer each, name in .gbClassName, MP cells as .gbMPBox
     const courses = await page.$$eval('.gbClassContainer', (nodes: any[]) => {
       const out: any[] = [];
       for (const box of nodes) {
@@ -124,18 +118,18 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
 
         const mpGrades: { label: string; percent: number; weight: number }[] = [];
         const mpCells = (box as any).querySelectorAll?.('.gbMPBox') || [];
-        let i = 0;
+        let idx = 0;
         for (const mp of Array.from(mpCells) as any[]) {
           const raw = (mp.textContent || '').trim();
           const pct = parseFloat(raw.replace('%', ''));
-          if (!Number.isNaN(pct)) mpGrades.push({ label: `MP${++i}`, percent: pct, weight: 1 });
+          if (!Number.isNaN(pct)) mpGrades.push({ label: `MP${++idx}`, percent: pct, weight: 1 });
         }
 
         out.push({
           id: (globalThis as any).crypto?.randomUUID?.() || String(Math.random()),
           name: courseName,
           code: undefined,
-          credit: 0, // fill later from Grading
+          credit: 0,
           level: 'Unknown',
           markingPeriods: mpGrades
         });
@@ -143,12 +137,10 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return out;
     });
 
-    // --- GRADING: Current Grades (to get credits) ---
-    const gradingUrl =
-      `${base}/genesis/parents?tab1=studentdata&tab2=grading&tab3=current&action=form&studentid=${studentId}`;
+    // --- GRADING ---
+    const gradingUrl = `${base}/genesis/parents?tab1=studentdata&tab2=grading&tab3=current&action=form&studentid=${studentId}`;
     await page.goto(gradingUrl, { waitUntil: 'domcontentloaded' });
 
-    // Table columns typically: Course | Sem | School | Teacher | Cr | ...
     const creditsMap = await page.$$eval('table tr', (rows: any[]) => {
       const map: Record<string, number> = {};
       for (const tr of rows) {
@@ -156,7 +148,6 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
           .map((td: any) => (td.textContent || '').trim());
         if (tds.length >= 2) {
           const course = tds[0];
-          // Find a numeric credit value (prefer 5th col, else last numeric)
           let credit = parseFloat(tds[4]);
           if (Number.isNaN(credit)) {
             for (let i = tds.length - 1; i >= 1; i--) {
@@ -170,17 +161,13 @@ export async function fetchGenesis(input: GenesisFetchInput): Promise<GenesisDat
       return map;
     });
 
-    // --- Normalize + detect level ---
     const normalized = (courses as any[]).map(c => ({
       ...c,
       credit: creditsMap[c.name] ?? 1,
       level: detectLevel(c.name)
     }));
 
-    // --- Assignments placeholder (add later from listassignments) ---
-    const assignments: GenesisData['assignments'] = [];
-
-    return { courses: normalized, assignments };
+    return { courses: normalized, assignments: [] };
   } finally {
     await browser.close();
   }
