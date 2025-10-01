@@ -21,7 +21,7 @@ jobs:
           node-version: '20'
       - run: npm install
       # Replace the URL below with your actual Render API URL
-      - run: echo "VITE_API=https://<your-render-subdomain>.onrender.com" >> .env
+      - run: echo "VITE_API=https://genesisgpa.onrender.com" >> .env
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
